@@ -324,3 +324,67 @@ def debug_fetch2():
             results[f'content_{extra_content}'] = {'error': str(e)}
 
     return jsonify(results)
+
+
+@app.route('/api/debug3', methods=['GET'])
+def debug_fetch3():
+    """list-field div 내용 추출 - /api/debug3?race=2026+Washington+DC&sex=M&age=50"""
+    import requests as req
+    from bs4 import BeautifulSoup, Tag
+    race = request.args.get('race', '2026 Washington DC')
+    sex  = request.args.get('sex', 'M')
+    age  = request.args.get('age', '50')
+
+    hdrs = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'https://results.hyrox.com/season-8/'}
+
+    r = req.get('https://results.hyrox.com/season-8/index.php',
+                params={'event_main_group': race, 'pid': 'list', 'pidp': 'ranking_nav',
+                        'search[sex]': sex, 'search[age_class]': age, 'search[nation]': '%'},
+                headers=hdrs, timeout=15)
+
+    soup = BeautifulSoup(r.text, 'html.parser')
+    html = r.text
+
+    # 1. list-field 내용 전부 추출
+    fields = soup.find_all(class_='list-field')
+    field_data = []
+    for f in fields[:60]:
+        field_data.append({
+            'classes': f.get('class', []),
+            'text': f.get_text(' ', strip=True)[:200],
+            'html': str(f)[:300],
+        })
+
+    # 2. list-group-item 내용
+    items = soup.find_all(class_='list-group-item')
+    item_data = [{'text': i.get_text(' ', strip=True)[:300], 'html': str(i)[:400]} for i in items[:20]]
+
+    # 3. HTML 중간 부분 (3000~12000, 12000~22000)
+    mid1 = html[3000:12000]
+    mid2 = html[12000:22000]
+
+    # 4. 시간 패턴 검색
+    import re
+    times = re.findall(r'\d{1,2}:\d{2}:\d{2}(?:\.\d+)?', html)[:30]
+
+    # 5. 숫자로 시작하는 텍스트 (순위)
+    ranks = re.findall(r'>\s*(\d{1,4})\s*<', html)[:20]
+
+    # 6. cbox-main 안의 모든 텍스트
+    cbox = soup.find(class_='cbox-main')
+    cbox_text = cbox.get_text(' | ', strip=True)[:5000] if cbox else 'not found'
+
+    return jsonify({
+        'status': r.status_code,
+        'total_len': len(html),
+        'list_fields_count': len(fields),
+        'list_fields': field_data,
+        'list_group_items_count': len(items),
+        'list_group_items': item_data,
+        'times_in_html': times,
+        'ranks_in_html': ranks,
+        'cbox_text': cbox_text,
+        'html_mid1_3k_12k': mid1,
+        'html_mid2_12k_22k': mid2,
+    })
