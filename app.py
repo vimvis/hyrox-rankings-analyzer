@@ -191,3 +191,41 @@ if __name__ == '__main__':
     # 개발 서버로 실행
     # 프로덕션에서는 gunicorn 등을 사용하세요
     app.run(debug=True, host='0.0.0.0', port=5000)
+
+
+@app.route('/api/debug', methods=['GET'])
+def debug_fetch():
+    """Hyrox HTML 응답 디버그 - /api/debug?race=2026+Washington+DC&sex=M&age=50"""
+    import requests as req
+    race = request.args.get('race', '2026 Washington DC')
+    sex  = request.args.get('sex', 'M')
+    age  = request.args.get('age', '50')
+    results = {}
+
+    hdrs = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8',
+        'Referer': 'https://results.hyrox.com/season-8/',
+    }
+
+    for label, url, params in [
+        ('pid_list', 'https://results.hyrox.com/season-8/index.php',
+         {'event_main_group': race, 'pid': 'list', 'pidp': 'ranking_nav',
+          'search[sex]': sex, 'search[age_class]': age, 'search[nation]': '%'}),
+        ('ajax2', 'https://results.hyrox.com/season-8/',
+         {'content': 'ajax2', 'client': 'js', 'event_main_group': race,
+          'search[sex]': sex, 'search[age_class]': age}),
+        ('base', 'https://results.hyrox.com/season-8/', {}),
+    ]:
+        try:
+            r = req.get(url, params=params, headers=hdrs, timeout=12)
+            results[label] = {
+                'url': r.url, 'status': r.status_code,
+                'ct': r.headers.get('Content-Type',''),
+                'len': len(r.text),
+                'snippet': r.text[:4000],
+            }
+        except Exception as e:
+            results[label] = {'error': str(e)}
+
+    return jsonify(results)
