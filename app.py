@@ -388,3 +388,81 @@ def debug_fetch3():
         'html_mid1_3k_12k': mid1,
         'html_mid2_12k_22k': mid2,
     })
+
+
+@app.route('/api/debug4', methods=['GET'])
+def debug_fetch4():
+    """Division 드롭다운 옵션 + list_overall 테스트"""
+    import requests as req
+    from bs4 import BeautifulSoup
+    race = request.args.get('race', '2026 Washington DC')
+    sex  = request.args.get('sex', 'M')
+    age  = request.args.get('age', '50')
+    hdrs = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Referer': 'https://results.hyrox.com/season-8/'}
+    results = {}
+
+    # 1. pid=list 에서 select/dropdown 옵션 추출 (Division event IDs)
+    r1 = req.get('https://results.hyrox.com/season-8/index.php',
+                 params={'event_main_group': race, 'pid': 'list', 'pidp': 'ranking_nav',
+                         'search[sex]': sex, 'search[age_class]': age, 'search[nation]': '%'},
+                 headers=hdrs, timeout=15)
+    soup1 = BeautifulSoup(r1.text, 'html.parser')
+
+    # 모든 select 드롭다운과 option 추출
+    selects = []
+    for sel in soup1.find_all('select'):
+        opts = [{'value': o.get('value',''), 'text': o.get_text(strip=True), 'selected': o.has_attr('selected')}
+                for o in sel.find_all('option')]
+        selects.append({'name': sel.get('name',''), 'id': sel.get('id',''), 'options': opts})
+
+    # data-* 속성이 있는 링크/버튼 (division 선택용)
+    data_links = []
+    for a in soup1.find_all(['a', 'li', 'div'], attrs={'data-event': True}):
+        data_links.append({'tag': a.name, 'data-event': a.get('data-event'), 'text': a.get_text(strip=True)[:50]})
+
+    # href 패턴에서 event= 파라미터 찾기
+    import re
+    event_hrefs = re.findall(r'search%5Bevent%5D=([^&"\']+)', r1.text)[:20]
+    event_hrefs2 = re.findall(r'search\[event\]=([^&"\']+)', r1.text)[:20]
+    event_hrefs3 = re.findall(r'[?&]event=([^&"\'<>\s]+)', r1.text)[:20]
+
+    results['div_selects'] = selects
+    results['data_links'] = data_links
+    results['event_params_in_html'] = list(set(event_hrefs + event_hrefs2 + event_hrefs3))
+
+    # 2. pid=list_overall (All Time Ranking) 시도
+    r2 = req.get('https://results.hyrox.com/season-8/index.php',
+                 params={'pid': 'list_overall', 'pidp': 'ranking_nav',
+                         'search[sex]': sex, 'search[age_class]': age},
+                 headers=hdrs, timeout=15)
+    soup2 = BeautifulSoup(r2.text, 'html.parser')
+    items2 = soup2.find_all(class_='list-group-item')
+    fields2 = soup2.find_all(class_='list-field')
+    cbox2 = soup2.find(class_='cbox-main')
+    results['list_overall'] = {
+        'status': r2.status_code,
+        'len': len(r2.text),
+        'items_count': len(items2),
+        'fields_count': len(fields2),
+        'cbox_text': cbox2.get_text(' | ', strip=True)[:2000] if cbox2 else 'not found',
+        'item_texts': [i.get_text(' ', strip=True)[:200] for i in items2[:10]],
+    }
+
+    # 3. event_main_group 없이 pid=list (전체 시즌)
+    r3 = req.get('https://results.hyrox.com/season-8/index.php',
+                 params={'pid': 'list', 'pidp': 'ranking_nav',
+                         'search[sex]': sex, 'search[age_class]': age, 'search[nation]': '%'},
+                 headers=hdrs, timeout=15)
+    soup3 = BeautifulSoup(r3.text, 'html.parser')
+    items3 = soup3.find_all(class_='list-group-item')
+    cbox3 = soup3.find(class_='cbox-main')
+    results['no_event_list'] = {
+        'status': r3.status_code,
+        'len': len(r3.text),
+        'items_count': len(items3),
+        'cbox_text': cbox3.get_text(' | ', strip=True)[:2000] if cbox3 else 'not found',
+        'item_texts': [i.get_text(' ', strip=True)[:300] for i in items3[:15]],
+    }
+
+    return jsonify(results)
