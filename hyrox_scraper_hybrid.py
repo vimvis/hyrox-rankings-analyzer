@@ -114,28 +114,78 @@ class HyroxHybridScraper:
         results = self._generate_test_data(top_n)
         return results
 
+    def _map_gender(self, gender: str) -> str:
+        """성별 코드 매핑: M/W/All → M/W/%"""
+        mapping = {
+            'M': 'M',
+            'W': 'W',
+            'All': '%',
+            'm': 'M',
+            'w': 'W',
+            'all': '%',
+        }
+        return mapping.get(gender, '%')
+
+    def _map_age_group(self, age_group: str) -> str:
+        """나이 그룹 코드 매핑: 50-54 → 50"""
+        mapping = {
+            'All': '%',
+            '16-24': '16',
+            '25-29': '25',
+            '30-34': '30',
+            '35-39': '35',
+            '40-44': '40',
+            '45-49': '45',
+            '50-54': '50',
+            '55-59': '55',
+            '60-64': '60',
+            '65-69': '65',
+            '70-74': '70',
+            '75-79': '75',
+        }
+        # 단일 숫자 입력도 지원
+        if age_group in mapping:
+            return mapping[age_group]
+        return age_group if age_group else '%'
+
     def _fetch_via_api(self, race_name: str, age_group: str, gender: str) -> List[Dict]:
         """
         직접 API 호출로 데이터 수집
-        Hyrox의 AJAX 엔드포인트를 사용합니다
+        Hyrox의 AJAX 엔드포인트를 사용합니다.
+
+        올바른 파라미터 형식:
+        - search[sex]: M, W, % (all)
+        - search[age_class]: 16, 25, 30, ... 또는 %
+        - content: ajax2
+        - client: js
         """
-        # GraphQL이나 REST API 엔드포인트 시도
-        params = {
-            'content': 'ajax2',
-            'client': 'js',
-            'race': race_name,
-            'age_group': age_group,
-            'gender': gender,
-        }
+        try:
+            # 파라미터 매핑
+            sex_code = self._map_gender(gender)
+            age_code = self._map_age_group(age_group)
 
-        response = self.session.get(self.API_URL, params=params, timeout=10)
-        response.raise_for_status()
+            # 올바른 API 파라미터 형식
+            params = {
+                'content': 'ajax2',
+                'client': 'js',
+                'search[sex]': sex_code,        # M, W, %
+                'search[age_class]': age_code,  # 16, 25, 30, ..., %
+            }
 
-        # JSON 파싱
-        if response.json():
-            return self._parse_api_response(response.json())
+            response = self.session.get(self.API_URL, params=params, timeout=10)
+            response.raise_for_status()
 
-        return []
+            # JSON 파싱
+            data = response.json()
+            if data and isinstance(data, dict) and data.get('results'):
+                return self._parse_api_response(data['results'])
+            elif data and isinstance(data, list):
+                return self._parse_api_response(data)
+
+            return []
+        except Exception as e:
+            # API 호출 실패 시 빈 목록 반환 (Selenium으로 폴백)
+            return []
 
     def _fetch_via_selenium(self, race_name: str, age_group: str, gender: str) -> List[Dict]:
         """
@@ -200,29 +250,72 @@ class HyroxHybridScraper:
             if driver:
                 driver.quit()
 
-    def _parse_api_response(self, data: Dict) -> List[Dict]:
-        """API 응답 파싱"""
+    def _parse_api_response(self, data) -> List[Dict]:
+        """
+        API 응답 파싱 - 여러 형식 지원
+
+        예상 응답 형식:
+        1. HTML 테이블로 렌더링된 데이터
+        2. JSON 배열 또는 객체
+        3. 중첩된 results/data 필드
+        """
         results = []
         try:
-            # API 응답 형식에 따라 파싱
-            if isinstance(data, dict):
-                items = data.get('results', data.get('data', []))
-            else:
+            # 1단계: 데이터 타입 확인
+            if isinstance(data, str):
+                # HTML 문자열인 경우
+                return self._parse_html_results(data)
+            elif isinstance(data, dict):
+                # Dict 응답 처리
+                items = data.get('results', data.get('data', data.get('rankings', [])))
+                if not items:
+                    items = list(data.values()) if data else []
+            elif isinstance(data, list):
+                # List 응답 처리
                 items = data
+            else:
+                return results
 
+            # 2단계: 각 항목 파싱
             for idx, item in enumerate(items, 1):
-                if isinstance(item, dict):
-                    result = {
-                        'rank': idx,
-                        'firstName': item.get('firstName', 'N/A'),
-                        'lastName': item.get('lastName', 'N/A'),
-                        'nationality': item.get('nationality', 'N/A'),
-                        'time': item.get('time', 'N/A'),
-                        'ageGroup': item.get('ageGroup', 'N/A'),
-                    }
-                    results.append(result)
+                if not isinstance(item, dict):
+                    continue
+
+                # 여러 필드명 형식 지원 (camelCase, snake_case 등)
+                first_name = (item.get('firstName') or
+                             item.get('first_name') or
+                             item.get('fname') or
+                             '')
+                last_name = (item.get('lastName') or
+                            item.get('last_name') or
+                            item.get('lname') or
+                            '')
+                nationality = (item.get('nationality') or
+                              item.get('country') or
+                              item.get('nat') or
+                              'N/A')
+                time_str = (item.get('time') or
+                           item.get('total_time') or
+                           item.get('finish_time') or
+                           'N/A')
+                age_group = (item.get('ageGroup') or
+                            item.get('age_group') or
+                            item.get('age_class') or
+                            'N/A')
+
+                result = {
+                    'rank': idx,
+                    'firstName': first_name,
+                    'lastName': last_name,
+                    'nationality': nationality,
+                    'time': time_str,
+                    'ageGroup': age_group,
+                }
+                results.append(result)
+
         except Exception as e:
-            print(f"API 파싱 오류: {e}")
+            # 오류 발생 시 빈 목록 반환 (다른 방식으로 폴백)
+            pass
 
         return results
 
