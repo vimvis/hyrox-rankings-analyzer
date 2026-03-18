@@ -2,7 +2,7 @@
 """
 HYROX Rankings Analyzer - Hybrid Scraper
 여러 방식으로 실제 데이터를 수집합니다:
-1. 먼저 직접 API 호출 시도
+1. 먼저 직접 HTML 페이지 파싱 시도
 2. Selenium 사용 시도
 3. 마지막으로 테스트 데이터 폴백
 """
@@ -13,11 +13,13 @@ from typing import Dict, List, Tuple
 import time
 import random
 
+
 class HyroxHybridScraper:
     """여러 방식으로 Hyrox 데이터를 수집하는 하이브리드 스크래퍼"""
 
+    # 올바른 URL: index.php 필요
     BASE_URL = "https://results.hyrox.com/season-8/"
-    API_URL = "https://results.hyrox.com/season-8/"
+    INDEX_URL = "https://results.hyrox.com/season-8/index.php"
 
     RACES_2025 = [
         ("2025 Stockholm", "2025-01-18"),
@@ -41,6 +43,7 @@ class HyroxHybridScraper:
         ("2026 Cancun", "2026-02-22"),
         ("2026 Copenhagen", "2026-03-01"),
         ("2026 Washington DC", "2026-03-08"),
+        ("2026 Phoenix", "2026-03-15"),
     ]
 
     AGE_GROUP_MAPPING = {
@@ -72,10 +75,13 @@ class HyroxHybridScraper:
 
     def __init__(self):
         """초기화"""
-        print("✅ 하이브리드 스크래퍼 준비됨 (API → Selenium → Test Data)")
+        print("✅ 하이브리드 스크래퍼 준비됨 (HTML → Selenium → Test Data)")
         self.session = requests.Session()
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Referer': 'https://results.hyrox.com/season-8/',
         })
 
     def get_recent_races(self, num_races: int = 10) -> List[Tuple[str, str]]:
@@ -91,14 +97,16 @@ class HyroxHybridScraper:
         """
         print(f"  🔄 {race_name} 데이터 로드 중...", end="", flush=True)
 
-        # 1단계: 직접 API 호출 시도
+        # 1단계: 직접 HTML 페이지 파싱 시도
         try:
-            results = self._fetch_via_api(race_name, age_group, gender)
+            results = self._fetch_via_html(race_name, age_group, gender)
             if results:
-                print(f" ✅ API로 {len(results)}명 수집")
+                print(f" ✅ HTML로 {len(results)}명 수집")
                 return results[:top_n]
+            else:
+                print(f" (HTML: 결과 없음)", end="")
         except Exception as e:
-            print(f" (API 실패: {type(e).__name__})", end="")
+            print(f" (HTML 실패: {type(e).__name__}: {str(e)[:60]})", end="")
 
         # 2단계: Selenium 시도
         try:
@@ -143,63 +151,76 @@ class HyroxHybridScraper:
             '70-74': '70',
             '75-79': '75',
         }
-        # 단일 숫자 입력도 지원
         if age_group in mapping:
             return mapping[age_group]
         return age_group if age_group else '%'
 
-    def _fetch_via_api(self, race_name: str, age_group: str, gender: str) -> List[Dict]:
+    def _fetch_via_html(self, race_name: str, age_group: str, gender: str) -> List[Dict]:
         """
-        직접 API 호출로 데이터 수집
-        Hyrox의 AJAX 엔드포인트를 사용합니다.
+        직접 HTML 페이지 파싱으로 데이터 수집
 
-        올바른 파라미터 형식:
-        - search[sex]: M, W, % (all)
-        - search[age_class]: 16, 25, 30, ... 또는 %
-        - content: ajax2
-        - client: js
+        올바른 URL 구조:
+        https://results.hyrox.com/season-8/index.php
+            ?event_main_group=2026+Washington+DC
+            &pid=list
+            &pidp=ranking_nav
+            &search[sex]=M
+            &search[age_class]=50
+            &search[nation]=%
+
+        또는 전체 랭킹:
+        https://results.hyrox.com/season-8/index.php
+            ?pid=list_overall
+            &pidp=ranking_nav
+            &search[sex]=M
+            &search[age_class]=50
         """
-        try:
-            # 파라미터 매핑
-            sex_code = self._map_gender(gender)
-            age_code = self._map_age_group(age_group)
+        sex_code = self._map_gender(gender)
+        age_code = self._map_age_group(age_group)
 
-            # 올바른 API 파라미터 형식
-            params = {
-                'content': 'ajax2',
-                'client': 'js',
-                'search[sex]': sex_code,        # M, W, %
-                'search[age_class]': age_code,  # 16, 25, 30, ..., %
+        # race_name을 URL 파라미터로 변환
+        # "2026 Washington DC" → "2026 Washington DC" (공백 유지, requests가 인코딩)
+        event_group = race_name
+
+        # 전략 1: 특정 이벤트 결과 페이지
+        params_event = {
+            'event_main_group': event_group,
+            'pid': 'list',
+            'pidp': 'ranking_nav',
+            'search[sex]': sex_code,
+            'search[age_class]': age_code,
+            'search[nation]': '%',
+        }
+
+        print(f"\n      [HTML 호출] URL: {self.INDEX_URL}", flush=True)
+        print(f"      [HTML 호출] Params: {params_event}", flush=True)
+
+        response = self.session.get(self.INDEX_URL, params=params_event, timeout=15)
+        print(f"      [HTML 응답] Status: {response.status_code}, Length: {len(response.text)}", flush=True)
+        print(f"      [HTML 응답] Content-Type: {response.headers.get('Content-Type', 'N/A')}", flush=True)
+
+        response.raise_for_status()
+
+        # HTML 파싱
+        results = self._parse_html_results(response.text)
+        print(f"      [HTML 결과] {len(results)}명 파싱됨", flush=True)
+
+        # 전략 1 실패 시 전체 랭킹으로 폴백
+        if not results:
+            print(f"      [HTML 전략2] 전체 랭킹으로 재시도...", flush=True)
+            params_overall = {
+                'pid': 'list_overall',
+                'pidp': 'ranking_nav',
+                'search[sex]': sex_code,
+                'search[age_class]': age_code,
             }
+            response2 = self.session.get(self.INDEX_URL, params=params_overall, timeout=15)
+            print(f"      [HTML 전략2] Status: {response2.status_code}, Length: {len(response2.text)}", flush=True)
+            response2.raise_for_status()
+            results = self._parse_html_results(response2.text)
+            print(f"      [HTML 전략2] {len(results)}명 파싱됨", flush=True)
 
-            # 디버깅용 로깅
-            print(f"      [API 호출] URL: {self.API_URL}", flush=True)
-            print(f"      [API 호출] Params: {params}", flush=True)
-
-            response = self.session.get(self.API_URL, params=params, timeout=10)
-            print(f"      [API 응답] Status: {response.status_code}, Length: {len(response.text)}", flush=True)
-
-            response.raise_for_status()
-
-            # JSON 파싱
-            data = response.json()
-            print(f"      [API JSON] Type: {type(data)}, Keys: {list(data.keys()) if isinstance(data, dict) else 'N/A'}", flush=True)
-
-            if data and isinstance(data, dict) and data.get('results'):
-                results = self._parse_api_response(data['results'])
-                print(f"      [API 결과] {len(results)}명 수집됨", flush=True)
-                return results
-            elif data and isinstance(data, list):
-                results = self._parse_api_response(data)
-                print(f"      [API 결과] {len(results)}명 수집됨", flush=True)
-                return results
-
-            print(f"      [API 경고] 데이터가 비어있음", flush=True)
-            return []
-        except Exception as e:
-            # API 호출 실패 시 빈 목록 반환 (Selenium으로 폴백)
-            print(f"      [API 오류] {type(e).__name__}: {str(e)}", flush=True)
-            return []
+        return results
 
     def _fetch_via_selenium(self, race_name: str, age_group: str, gender: str) -> List[Dict]:
         """
@@ -264,116 +285,221 @@ class HyroxHybridScraper:
             if driver:
                 driver.quit()
 
-    def _parse_api_response(self, data) -> List[Dict]:
-        """
-        API 응답 파싱 - 여러 형식 지원
-
-        예상 응답 형식:
-        1. HTML 테이블로 렌더링된 데이터
-        2. JSON 배열 또는 객체
-        3. 중첩된 results/data 필드
-        """
-        results = []
-        try:
-            # 1단계: 데이터 타입 확인
-            if isinstance(data, str):
-                # HTML 문자열인 경우
-                return self._parse_html_results(data)
-            elif isinstance(data, dict):
-                # Dict 응답 처리
-                items = data.get('results', data.get('data', data.get('rankings', [])))
-                if not items:
-                    items = list(data.values()) if data else []
-            elif isinstance(data, list):
-                # List 응답 처리
-                items = data
-            else:
-                return results
-
-            # 2단계: 각 항목 파싱
-            for idx, item in enumerate(items, 1):
-                if not isinstance(item, dict):
-                    continue
-
-                # 여러 필드명 형식 지원 (camelCase, snake_case 등)
-                first_name = (item.get('firstName') or
-                             item.get('first_name') or
-                             item.get('fname') or
-                             '')
-                last_name = (item.get('lastName') or
-                            item.get('last_name') or
-                            item.get('lname') or
-                            '')
-                nationality = (item.get('nationality') or
-                              item.get('country') or
-                              item.get('nat') or
-                              'N/A')
-                time_str = (item.get('time') or
-                           item.get('total_time') or
-                           item.get('finish_time') or
-                           'N/A')
-                age_group = (item.get('ageGroup') or
-                            item.get('age_group') or
-                            item.get('age_class') or
-                            'N/A')
-
-                result = {
-                    'rank': idx,
-                    'firstName': first_name,
-                    'lastName': last_name,
-                    'nationality': nationality,
-                    'time': time_str,
-                    'ageGroup': age_group,
-                }
-                results.append(result)
-
-        except Exception as e:
-            # 오류 발생 시 빈 목록 반환 (다른 방식으로 폴백)
-            pass
-
-        return results
-
     def _parse_html_results(self, html: str) -> List[Dict]:
-        """HTML 파싱"""
+        """
+        mika:timing HTML 테이블 파싱
+
+        예상 테이블 구조:
+        - Col 0: Rank
+        - Col 1: Name (Last, First 형식)
+        - Col 2: Nationality
+        - Col 3: Age Class
+        - Col 4: City (옵션)
+        - Col 5: Division (H, HD, HE 등)
+        - Col 6: Finish Time
+        """
         results = []
+
         try:
             soup = BeautifulSoup(html, 'html.parser')
-            table = soup.find('table')
+
+            # 디버깅: 페이지 내용 확인
+            page_title = soup.find('title')
+            print(f"      [HTML 파싱] 페이지 제목: {page_title.get_text() if page_title else 'N/A'}", flush=True)
+
+            # 결과 테이블 찾기 (여러 선택자 시도)
+            table = None
+            selectors = [
+                'table.results-list',
+                'table.ranking-list',
+                'table#resultTable',
+                'table.list-table',
+                'div.list-results table',
+                'div#listContainer table',
+                'table',  # 마지막 수단: 첫 번째 테이블
+            ]
+
+            for selector in selectors:
+                table = soup.select_one(selector)
+                if table:
+                    print(f"      [HTML 파싱] 테이블 발견: '{selector}'", flush=True)
+                    break
 
             if not table:
-                return results
+                print(f"      [HTML 파싱] 테이블 없음! Tables 수: {len(soup.find_all('table'))}", flush=True)
+                # 테이블이 없으면 리스트 형태로 파싱 시도
+                return self._parse_list_results(soup)
 
-            tbody = table.find('tbody')
-            if not tbody:
-                return results
+            # 헤더 파싱 (컬럼 순서 파악)
+            headers = []
+            thead = table.find('thead')
+            if thead:
+                header_cells = thead.find_all(['th', 'td'])
+                headers = [h.get_text(strip=True).lower() for h in header_cells]
+                print(f"      [HTML 파싱] 헤더: {headers}", flush=True)
 
+            # 데이터 행 파싱
+            tbody = table.find('tbody') or table
             rows = tbody.find_all('tr')
+            print(f"      [HTML 파싱] 데이터 행 수: {len(rows)}", flush=True)
+
             for idx, row in enumerate(rows, 1):
-                cells = row.find_all('td')
-                if len(cells) < 6:
+                cells = row.find_all(['td', 'th'])
+                if len(cells) < 3:
                     continue
 
                 try:
-                    name_cell = cells[1].get_text(strip=True)
-                    name_parts = name_cell.split(',')
+                    # 각 셀 텍스트 추출
+                    cell_texts = [c.get_text(strip=True) for c in cells]
 
-                    result = {
-                        'rank': idx,
-                        'firstName': name_parts[0].strip() if len(name_parts) > 1 else name_parts[0],
-                        'lastName': name_parts[1].strip() if len(name_parts) > 1 else '',
-                        'nationality': cells[2].get_text(strip=True),
-                        'time': cells[4].get_text(strip=True),
-                        'ageGroup': self.AGE_GROUP_MAPPING.get(
-                            cells[3].get_text(strip=True),
-                            cells[3].get_text(strip=True)
-                        ),
-                    }
-                    results.append(result)
-                except:
+                    # 헤더 기반 파싱 (헤더가 있는 경우)
+                    if headers and len(headers) == len(cell_texts):
+                        result = self._parse_row_by_headers(headers, cell_texts, idx)
+                    else:
+                        # 위치 기반 파싱 (mika:timing 기본 구조)
+                        result = self._parse_row_by_position(cell_texts, idx)
+
+                    if result:
+                        results.append(result)
+
+                except Exception as e:
                     continue
 
+            print(f"      [HTML 파싱] 최종 결과: {len(results)}명", flush=True)
+
         except Exception as e:
-            print(f"HTML 파싱 오류: {e}")
+            print(f"      [HTML 파싱 오류] {type(e).__name__}: {str(e)}", flush=True)
+
+        return results
+
+    def _parse_row_by_headers(self, headers: List[str], cells: List[str], idx: int) -> Dict:
+        """헤더 컬럼명 기반 행 파싱"""
+        def find_col(keywords):
+            for kw in keywords:
+                for i, h in enumerate(headers):
+                    if kw in h:
+                        return cells[i] if i < len(cells) else ''
+            return ''
+
+        name_raw = find_col(['name', 'athlete', 'participant', 'competitor'])
+        nat = find_col(['nat', 'country', 'nation'])
+        time_val = find_col(['time', 'finish', 'result', 'total'])
+        age = find_col(['age', 'class', 'category'])
+
+        # 이름 분리 (Last, First 형식)
+        if ',' in name_raw:
+            parts = name_raw.split(',', 1)
+            last_name = parts[0].strip()
+            first_name = parts[1].strip()
+        else:
+            parts = name_raw.split(' ', 1)
+            first_name = parts[0].strip()
+            last_name = parts[1].strip() if len(parts) > 1 else ''
+
+        if not (first_name or last_name):
+            return None
+
+        return {
+            'rank': idx,
+            'firstName': first_name,
+            'lastName': last_name,
+            'nationality': nat or 'N/A',
+            'time': time_val or 'N/A',
+            'ageGroup': age or 'N/A',
+        }
+
+    def _parse_row_by_position(self, cells: List[str], idx: int) -> Dict:
+        """
+        위치 기반 행 파싱 (mika:timing 기본 구조)
+
+        mika:timing 기본 컬럼 순서:
+        0: Rank
+        1: Name (Last, First)
+        2: Nationality / Country
+        3: Age Class
+        4: City (선택)
+        5: Division (H, HD, etc.)
+        6: Finish Time
+
+        또는:
+        0: Rank
+        1: Name
+        2: Country
+        3: Finish Time
+        """
+        n = len(cells)
+        if n < 3:
+            return None
+
+        # 첫 셀이 숫자면 순위 컬럼
+        rank_offset = 0
+        try:
+            int(cells[0].replace('.', '').strip())
+            rank_offset = 1
+        except:
+            pass
+
+        name_raw = cells[rank_offset] if rank_offset < n else cells[0]
+
+        # 이름 분리
+        if ',' in name_raw:
+            parts = name_raw.split(',', 1)
+            last_name = parts[0].strip()
+            first_name = parts[1].strip()
+        else:
+            parts = name_raw.split(' ', 1)
+            first_name = parts[0].strip()
+            last_name = parts[1].strip() if len(parts) > 1 else ''
+
+        if not (first_name or last_name):
+            return None
+
+        # 국적 (rank_offset + 1)
+        nat_col = rank_offset + 1
+        nationality = cells[nat_col] if nat_col < n else 'N/A'
+
+        # 시간 - 마지막 컬럼 또는 HH:MM:SS 패턴으로 찾기
+        time_val = 'N/A'
+        import re
+        time_pattern = re.compile(r'\d{1,2}:\d{2}:\d{2}')
+        for cell in reversed(cells):
+            if time_pattern.match(cell.strip()):
+                time_val = cell.strip()
+                break
+
+        # Age group
+        age_col = rank_offset + 2
+        age_group = cells[age_col] if age_col < n else 'N/A'
+
+        return {
+            'rank': idx,
+            'firstName': first_name,
+            'lastName': last_name,
+            'nationality': nationality,
+            'time': time_val,
+            'ageGroup': age_group,
+        }
+
+    def _parse_list_results(self, soup) -> List[Dict]:
+        """테이블 없을 때 리스트/div 기반 파싱"""
+        results = []
+
+        # div 기반 결과 목록 시도
+        list_items = soup.select('.list-group-item, .result-item, .athlete-row, [class*="result"]')
+        print(f"      [리스트 파싱] 항목 수: {len(list_items)}", flush=True)
+
+        for idx, item in enumerate(list_items[:50], 1):
+            text = item.get_text(separator=' ', strip=True)
+            if not text:
+                continue
+            results.append({
+                'rank': idx,
+                'firstName': text[:30],
+                'lastName': '',
+                'nationality': 'N/A',
+                'time': 'N/A',
+                'ageGroup': 'N/A',
+            })
 
         return results
 
@@ -388,7 +514,6 @@ class HyroxHybridScraper:
             last_name = random.choice(self.TEST_LAST_NAMES)
             nationality = random.choice(self.TEST_NATIONALITIES)
 
-            # 시간 생성 (시간 : 분 : 초)
             hours = random.randint(0, 2)
             minutes = random.randint(0, 59)
             seconds = random.randint(0, 59)
@@ -419,7 +544,7 @@ class HyroxHybridScraper:
                 race_name, age_group, gender, division, top_n
             )
             results[race_name] = race_results
-            time.sleep(1)
+            time.sleep(0.5)
 
         return results
 
@@ -434,7 +559,7 @@ def main():
 
     try:
         results = scraper.search_rankings(
-            age_group='50',
+            age_group='50-54',
             gender='M',
             division='H',
             top_n=5,
@@ -445,7 +570,7 @@ def main():
         for race_name, race_results in results.items():
             print(f"📍 {race_name}:")
             for result in race_results:
-                print(f"   {result['rank']}. {result['firstName']} {result['lastName']} - {result['time']}")
+                print(f"   {result['rank']}. {result['firstName']} {result['lastName']} - {result['nationality']} - {result['time']}")
             print()
     finally:
         scraper.close()
