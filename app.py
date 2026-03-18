@@ -24,8 +24,24 @@ cache = {}
 @app.route('/')
 def index():
     """메인 페이지"""
-    # HTML 파일이 같은 디렉토리에 있는 경우
-    return open('hyrox_app.html', 'r', encoding='utf-8').read()
+    try:
+        # Vercel과 로컬 환경 모두 호환
+        html_file = 'hyrox_app_v2.html'
+        with open(html_file, 'r', encoding='utf-8') as f:
+            return f.read()
+    except FileNotFoundError:
+        # 파일이 없으면 간단한 HTML 반환
+        return '''
+        <!DOCTYPE html>
+        <html>
+        <head><title>HYROX Rankings Analyzer</title></head>
+        <body style="text-align: center; padding: 50px;">
+            <h1>🏃 HYROX Rankings Analyzer</h1>
+            <p>앱 파일을 로드할 수 없습니다.</p>
+            <p><a href="/api/races">API 테스트</a></p>
+        </body>
+        </html>
+        '''
 
 
 @app.route('/api/search', methods=['POST'])
