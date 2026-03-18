@@ -9,13 +9,14 @@ from flask_cors import CORS
 import json
 import os
 from datetime import datetime
-from hyrox_scraper import HyroxScraper
+from hyrox_scraper_hybrid import HyroxHybridScraper
 
 app = Flask(__name__)
 CORS(app)
 
 # 글로벌 스크래퍼 인스턴스
-scraper = HyroxScraper()
+# 하이브리드 스크래퍼: API → Selenium → Test Data 순서로 시도
+scraper = HyroxHybridScraper()
 
 # 캐시된 결과 (메모리)
 cache = {}
