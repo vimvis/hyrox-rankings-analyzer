@@ -172,19 +172,33 @@ class HyroxHybridScraper:
                 'search[age_class]': age_code,  # 16, 25, 30, ..., %
             }
 
+            # 디버깅용 로깅
+            print(f"      [API 호출] URL: {self.API_URL}", flush=True)
+            print(f"      [API 호출] Params: {params}", flush=True)
+
             response = self.session.get(self.API_URL, params=params, timeout=10)
+            print(f"      [API 응답] Status: {response.status_code}, Length: {len(response.text)}", flush=True)
+
             response.raise_for_status()
 
             # JSON 파싱
             data = response.json()
-            if data and isinstance(data, dict) and data.get('results'):
-                return self._parse_api_response(data['results'])
-            elif data and isinstance(data, list):
-                return self._parse_api_response(data)
+            print(f"      [API JSON] Type: {type(data)}, Keys: {list(data.keys()) if isinstance(data, dict) else 'N/A'}", flush=True)
 
+            if data and isinstance(data, dict) and data.get('results'):
+                results = self._parse_api_response(data['results'])
+                print(f"      [API 결과] {len(results)}명 수집됨", flush=True)
+                return results
+            elif data and isinstance(data, list):
+                results = self._parse_api_response(data)
+                print(f"      [API 결과] {len(results)}명 수집됨", flush=True)
+                return results
+
+            print(f"      [API 경고] 데이터가 비어있음", flush=True)
             return []
         except Exception as e:
             # API 호출 실패 시 빈 목록 반환 (Selenium으로 폴백)
+            print(f"      [API 오류] {type(e).__name__}: {str(e)}", flush=True)
             return []
 
     def _fetch_via_selenium(self, race_name: str, age_group: str, gender: str) -> List[Dict]:
