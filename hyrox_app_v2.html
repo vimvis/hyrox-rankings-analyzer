@@ -479,7 +479,10 @@
     </div>
 
     <script>
-        const API_BASE = 'http://localhost:5000';
+        // 환경에 따라 API 베이스 URL 자동 설정
+        const API_BASE = window.location.hostname === 'localhost'
+            ? 'http://localhost:5000'
+            : `${window.location.protocol}//${window.location.host}`;
 
         async function searchRankings() {
             const ageGroup = document.getElementById('ageGroup').value;
