@@ -229,3 +229,98 @@ def debug_fetch():
             results[label] = {'error': str(e)}
 
     return jsonify(results)
+@app.route('/api/debug2', methods=['GET'])
+def debug_fetch2():
+    """
+    Full HTML 분석 + 테이블 탐색 디버그
+    /api/debug2?race=2026+Washington+DC&sex=M&age=50
+    """
+    import requests as req
+    from bs4 import BeautifulSoup
+    race = request.args.get('race', '2026 Washington DC')
+    sex  = request.args.get('sex', 'M')
+    age  = request.args.get('age', '50')
+
+    hdrs = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html,application/xhtml+xml,*/*;q=0.8',
+        'Referer': 'https://results.hyrox.com/season-8/',
+    }
+
+    results = {}
+
+    # pid=list 전체 응답 분석
+    try:
+        r = req.get(
+            'https://results.hyrox.com/season-8/index.php',
+            params={'event_main_group': race, 'pid': 'list', 'pidp': 'ranking_nav',
+                    'search[sex]': sex, 'search[age_class]': age, 'search[nation]': '%'},
+            headers=hdrs, timeout=15
+        )
+        soup = BeautifulSoup(r.text, 'html.parser')
+
+        # 모든 테이블 찾기
+        tables = soup.find_all('table')
+        table_info = []
+        for i, t in enumerate(tables):
+            rows = t.find_all('tr')
+            cells_per_row = [len(row.find_all(['td','th'])) for row in rows[:3]]
+            table_info.append({
+                'index': i,
+                'class': t.get('class', []),
+                'id': t.get('id', ''),
+                'rows': len(rows),
+                'cells_in_first_rows': cells_per_row,
+                'first_row_text': rows[0].get_text(' | ', strip=True)[:200] if rows else '',
+                'second_row_text': rows[1].get_text(' | ', strip=True)[:200] if len(rows) > 1 else '',
+                'third_row_text': rows[2].get_text(' | ', strip=True)[:200] if len(rows) > 2 else '',
+            })
+
+        # tbody 직접 찾기
+        tbodies = soup.find_all('tbody')
+
+        # 선수 이름처럼 보이는 텍스트 검색 (대문자 이름 패턴)
+        import re
+        name_pattern = re.compile(r'[A-Z][a-z]+,\s*[A-Z]')
+        all_text = r.text
+        names_found = name_pattern.findall(all_text)[:20]
+
+        # ul.list-group 또는 div.list 패턴 찾기
+        list_divs = soup.find_all(['ul', 'ol', 'div'], class_=re.compile(r'list|result|rank', re.I))
+
+        results['pid_list_analysis'] = {
+            'status': r.status_code,
+            'total_len': len(r.text),
+            'table_count': len(tables),
+            'tables': table_info,
+            'tbody_count': len(tbodies),
+            'names_found_in_html': names_found,
+            'list_divs_count': len(list_divs),
+            'list_divs_classes': [str(d.get('class','')) for d in list_divs[:10]],
+            'full_html_tail': r.text[-3000:],   # 마지막 3000자
+            'body_start': str(soup.body)[:3000] if soup.body else 'no body',
+        }
+    except Exception as e:
+        import traceback
+        results['pid_list_analysis'] = {'error': str(e), 'trace': traceback.format_exc()}
+
+    # content=search 시도 (다른 데이터 엔드포인트 후보)
+    for extra_content in ['search', 'list', 'ajax3', 'results']:
+        try:
+            r2 = req.get(
+                'https://results.hyrox.com/season-8/',
+                params={'content': extra_content, 'client': 'js',
+                        'search[sex]': sex, 'search[age_class]': age,
+                        'event_main_group': race},
+                headers=hdrs, timeout=8
+            )
+            results[f'content_{extra_content}'] = {
+                'status': r2.status_code,
+                'ct': r2.headers.get('Content-Type',''),
+                'len': len(r2.text),
+                'snippet': r2.text[:2000],
+            }
+        except Exception as e:
+            results[f'content_{extra_content}'] = {'error': str(e)}
+
+    return jsonify(results)
